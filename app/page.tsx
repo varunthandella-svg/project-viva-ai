@@ -20,8 +20,9 @@ export default function Home() {
 
   const recognitionRef = useRef<any>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const finalTranscriptRef = useRef<string>("");
 
-  /* ================= UPLOAD ================= */
+  /* ---------------- UPLOAD ---------------- */
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -67,10 +68,15 @@ export default function Home() {
     }
   }
 
-  /* ================= VOICE (LIVE TEXT) ================= */
+  /* ---------------- VOICE (STABLE) ---------------- */
 
   function startListening() {
     if (listening) return;
+
+    stopListening(); // safety
+
+    finalTranscriptRef.current = "";
+    setAnswer("");
 
     const SpeechRecognition =
       (window as any).SpeechRecognition ||
@@ -79,50 +85,54 @@ export default function Home() {
     const rec = new SpeechRecognition();
 
     rec.continuous = true;
-    rec.interimResults = true; // ✅ LIVE TRANSCRIPTION
+    rec.interimResults = true;
     rec.lang = "en-US";
-
-    let finalTranscript = "";
 
     rec.onstart = () => setListening(true);
 
     rec.onend = () => {
       setListening(false);
-      setAnswer(finalTranscript.trim());
+      setAnswer(finalTranscriptRef.current.trim());
     };
 
     rec.onresult = (event: any) => {
-      let interimTranscript = "";
+      let interim = "";
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const transcript = event.results[i][0].transcript;
 
         if (event.results[i].isFinal) {
-          finalTranscript += transcript + " ";
+          finalTranscriptRef.current += transcript + " ";
         } else {
-          interimTranscript += transcript;
+          interim += transcript;
         }
       }
 
-      // ✅ Show live typing
-      setAnswer((finalTranscript + interimTranscript).trim());
+      setAnswer(
+        (finalTranscriptRef.current + interim).trim()
+      );
     };
 
-    rec.start();
     recognitionRef.current = rec;
+    rec.start();
   }
 
   function stopListening() {
-    recognitionRef.current?.stop();
-    recognitionRef.current = null;
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null;
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
     setListening(false);
   }
 
-  /* ================= TIMER ================= */
+  /* ---------------- TIMER (STRICT) ---------------- */
 
   useEffect(() => {
     if (!interviewStarted || questions.length === 0) return;
 
+    stopListening();
+    finalTranscriptRef.current = "";
     setAnswer("");
     setTimer(160);
 
@@ -131,8 +141,8 @@ export default function Home() {
     timerRef.current = setInterval(() => {
       setTimer((t) => {
         if (t <= 1) {
-          stopListening();
           clearInterval(timerRef.current!);
+          stopListening();
           return 0;
         }
         return t - 1;
@@ -143,15 +153,16 @@ export default function Home() {
       if (timerRef.current) clearInterval(timerRef.current);
       stopListening();
     };
-  }, [currentIndex, questions.length, interviewStarted]);
+  }, [currentIndex, interviewStarted]);
 
-  /* ================= SUBMIT ================= */
+  /* ---------------- SUBMIT (ONLY WAY TO NEXT QUESTION) ---------------- */
 
   function submitAnswer() {
     stopListening();
     if (timerRef.current) clearInterval(timerRef.current);
 
     setAnswers((prev) => [...prev, answer || "(No answer)"]);
+    finalTranscriptRef.current = "";
     setAnswer("");
 
     if (currentIndex + 1 < questions.length) {
@@ -161,7 +172,7 @@ export default function Home() {
     }
   }
 
-  /* ================= REPORT ================= */
+  /* ---------------- REPORT ---------------- */
 
   async function generateReport() {
     setLoading(true);
@@ -178,7 +189,7 @@ export default function Home() {
     if (res.ok) setReport(data.report);
   }
 
-  /* ================= UI ================= */
+  /* ---------------- UI ---------------- */
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100 flex justify-center px-6 py-10">
@@ -192,65 +203,10 @@ export default function Home() {
           </p>
         </div>
 
-        {/* LOADING SKELETON */}
-        {isFetchingQuestions && (
-          <div className="bg-zinc-900 rounded-xl p-10 space-y-6 animate-pulse">
-            <div className="h-4 bg-zinc-700 rounded w-1/3 mx-auto" />
-            <div className="h-4 bg-zinc-700 rounded w-3/4 mx-auto" />
-            <div className="h-24 bg-zinc-800 rounded" />
-            <p className="text-center text-sm text-zinc-400">
-              Analyzing your resume and preparing questions…
-            </p>
-          </div>
-        )}
-
-        {/* LANDING */}
-        {!interviewStarted && !isFetchingQuestions && (
-          <>
-            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 text-center space-y-4">
-              <h2 className="text-xl font-semibold">Before You Start</h2>
-              <p className="text-sm text-zinc-400">
-                This interview evaluates how well you understand the projects mentioned in your resume.
-              </p>
-
-              <div className="flex flex-col items-center gap-6 text-sm mt-6">
-                <div className="text-center">
-                  <h3 className="text-green-400 font-medium mb-2">✅ Do</h3>
-                  <ul className="space-y-2 text-zinc-300">
-                    <li>• Answer from your own project experience</li>
-                    <li>• Explain decisions and challenges clearly</li>
-                    <li>• Use examples from your resume</li>
-                  </ul>
-                </div>
-
-                <div className="text-center">
-                  <h3 className="text-red-400 font-medium mb-2">❌ Don’t</h3>
-                  <ul className="space-y-2 text-zinc-300">
-                    <li>• Give generic or theoretical answers</li>
-                    <li>• Copy from external sources</li>
-                    <li>• Exaggerate or fake project details</li>
-                  </ul>
-                </div>
-              </div>
-
-              <p className="text-xs text-zinc-400 mt-6">
-                Each question has a strict 160-second time limit.
-              </p>
-            </div>
-
-            <label className="block bg-zinc-900 border border-dashed border-zinc-700 rounded-xl p-10 text-center cursor-pointer hover:border-indigo-500 transition">
-              <input type="file" accept=".pdf" onChange={handleUpload} hidden />
-              <p className="text-lg font-medium">Upload your resume</p>
-              <p className="text-sm text-zinc-400 mt-2">
-                PDF format • Projects will be analyzed
-              </p>
-            </label>
-          </>
-        )}
-
         {/* INTERVIEW */}
         {!interviewCompleted && interviewStarted && questions.length > 0 && (
           <div className="bg-zinc-900 rounded-xl p-8 space-y-6">
+
             <div className="flex justify-between">
               <span className="text-sm text-zinc-400">
                 Question {currentIndex + 1} of {questions.length}
