@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
-import OpenAI from "openai";
+import { openai } from "@/lib/openai";
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
-});
+export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   try {
@@ -11,7 +9,7 @@ export async function POST(req: Request) {
 
     if (!resumeText) {
       return NextResponse.json(
-        { error: "Resume text missing" },
+        { error: "Missing resume text" },
         { status: 400 }
       );
     }
@@ -19,75 +17,62 @@ export async function POST(req: Request) {
     const prompt = `
 You are a technical interviewer.
 
-TASK (VERY IMPORTANT):
-1. Extract ONLY the PROJECTS from the resume below.
-2. Identify real projects mentioned by the candidate.
-3. For EACH project, generate ONE deep, implementation-level interview question.
+From the resume below:
+1. Identify the MAIN PROJECTS mentioned (ignore skills, education, tools).
+2. From those projects, generate EXACTLY 3 deep, project-based interview questions.
+3. Questions must test ownership, decisions, challenges, and impact.
+4. Each question must be specific to a project in the resume.
 
-STRICT RULES:
-- Questions must be strictly based on the resume projects.
-- Do NOT ask generic questions.
-- Do NOT invent projects.
-- If there is only 1 project, generate up to 3 questions from it.
-- Return ONLY valid JSON. No explanations. No markdown.
-
-OUTPUT FORMAT:
+Return output STRICTLY as JSON in this format:
 {
-  "projects": [
-    {
-      "name": "Project Name",
-      "question": "Deep project-based question"
-    }
+  "questions": [
+    "question 1",
+    "question 2",
+    "question 3"
   ]
 }
 
-RESUME:
+Resume:
 ${resumeText}
 `;
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.2,
-      max_tokens: 700,
+      temperature: 0.4,
       messages: [{ role: "user", content: prompt }],
     });
 
-    let content: string = response.choices[0].message.content || "";
+    const text = response.choices[0].message.content || "";
 
-    // ✅ CLEAN MARKDOWN (handles ```json ... ```)
-    content = content
-      .replace(/```json/gi, "")
-      .replace(/```/g, "")
-      .trim();
+    let questions: string[] = [];
 
-    let parsed: any;
     try {
-      parsed = JSON.parse(content);
-    } catch (err) {
-      console.error("JSON parse failed:", content);
+      const parsed = JSON.parse(text);
+      questions = parsed.questions;
+    } catch {
+      // fallback safety (never crash)
+      questions = text
+        .split("\n")
+        .map((q) => q.replace(/^[0-9.-]+/, "").trim())
+        .filter(Boolean)
+        .slice(0, 3);
+    }
+
+    // 🔒 HARD GUARANTEE: ALWAYS 3 QUESTIONS
+    questions = questions.slice(0, 3);
+
+    if (questions.length < 3) {
       return NextResponse.json(
-        { error: "Failed to parse project questions" },
+        { error: "Could not generate enough project questions" },
         { status: 500 }
       );
     }
 
-    if (!parsed.projects || parsed.projects.length === 0) {
-      return NextResponse.json(
-        { error: "No projects found in resume" },
-        { status: 422 }
-      );
-    }
-
-    // Take maximum 3 project-based questions
-    const questions = parsed.projects
-      .slice(0, 3)
-      .map((p: any) => p.question);
-
     return NextResponse.json({ questions });
-  } catch (error) {
-    console.error("Project question generation error:", error);
+  } catch (err) {
+    console.error(err);
     return NextResponse.json(
-      { error: "Failed to generate project-based questions" },
+      { error: "Failed to generate project questions" },
       { status: 500 }
     );
   }
