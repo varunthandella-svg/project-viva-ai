@@ -7,28 +7,29 @@ export async function POST(req: Request) {
   try {
     const { resumeText } = await req.json();
 
-    if (!resumeText) {
+    if (!resumeText || resumeText.length < 50) {
       return NextResponse.json(
-        { error: "Missing resume text" },
+        { error: "Invalid resume text" },
         { status: 400 }
       );
     }
 
     const prompt = `
-You are a technical interviewer.
+You are a senior technical interviewer.
 
-From the resume below:
-1. Identify the MAIN PROJECTS mentioned (ignore skills, education, tools).
-2. From those projects, generate EXACTLY 3 deep, project-based interview questions.
-3. Questions must test ownership, decisions, challenges, and impact.
-4. Each question must be specific to a project in the resume.
+TASK:
+1. Read the resume below.
+2. Identify ONLY real projects mentioned by the candidate.
+3. From those projects, generate EXACTLY 3 detailed, project-specific interview questions.
+4. Questions must test ownership, decisions, challenges, and impact.
+5. Each question must be a FULL sentence (minimum 12 words).
 
-Return output STRICTLY as JSON in this format:
+STRICT OUTPUT FORMAT (NO EXTRA TEXT):
 {
   "questions": [
-    "question 1",
-    "question 2",
-    "question 3"
+    "Full question 1",
+    "Full question 2",
+    "Full question 3"
   ]
 }
 
@@ -38,32 +39,51 @@ ${resumeText}
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      temperature: 0.4,
+      temperature: 0.3,
       messages: [{ role: "user", content: prompt }],
     });
 
-    const text = response.choices[0].message.content || "";
+    const raw = response.choices[0].message.content;
 
-    let questions: string[] = [];
-
-    try {
-      const parsed = JSON.parse(text);
-      questions = parsed.questions;
-    } catch {
-      // fallback safety (never crash)
-      questions = text
-        .split("\n")
-        .map((q) => q.replace(/^[0-9.-]+/, "").trim())
-        .filter(Boolean)
-        .slice(0, 3);
+    if (!raw) {
+      throw new Error("Empty OpenAI response");
     }
 
-    // 🔒 HARD GUARANTEE: ALWAYS 3 QUESTIONS
-    questions = questions.slice(0, 3);
+    let parsed: any;
 
-    if (questions.length < 3) {
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      console.error("JSON parse failed:", raw);
       return NextResponse.json(
-        { error: "Could not generate enough project questions" },
+        { error: "AI returned invalid JSON" },
+        { status: 500 }
+      );
+    }
+
+    if (
+      !parsed.questions ||
+      !Array.isArray(parsed.questions)
+    ) {
+      return NextResponse.json(
+        { error: "Invalid questions format" },
+        { status: 500 }
+      );
+    }
+
+    // ✅ FINAL VALIDATION
+    const questions = parsed.questions
+      .filter(
+        (q: any) =>
+          typeof q === "string" &&
+          q.trim().length > 20 &&      // avoids 1-word questions
+          q.split(" ").length >= 6
+      )
+      .slice(0, 3);
+
+    if (questions.length !== 3) {
+      return NextResponse.json(
+        { error: "Failed to generate 3 valid questions" },
         { status: 500 }
       );
     }
@@ -72,7 +92,7 @@ ${resumeText}
   } catch (err) {
     console.error(err);
     return NextResponse.json(
-      { error: "Failed to generate project questions" },
+      { error: "Question generation failed" },
       { status: 500 }
     );
   }

@@ -1,28 +1,28 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export default function Home() {
   const [interviewStarted, setInterviewStarted] = useState(false);
   const [isFetchingQuestions, setIsFetchingQuestions] = useState(false);
 
   const [questions, setQuestions] = useState<string[]>([]);
-  const [answers, setAnswers] = useState<string[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [answers, setAnswers] = useState<string[]>([]);
 
   const [answer, setAnswer] = useState("");
-  const [timer, setTimer] = useState(160);
   const [listening, setListening] = useState(false);
+  const [timer, setTimer] = useState(160);
 
   const [interviewCompleted, setInterviewCompleted] = useState(false);
   const [report, setReport] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loadingReport, setLoadingReport] = useState(false);
 
   const recognitionRef = useRef<any>(null);
+  const finalTranscriptRef = useRef("");
   const timerRef = useRef<NodeJS.Timeout | null>(null);
-  const finalTranscriptRef = useRef<string>("");
 
-  /* ---------------- UPLOAD ---------------- */
+  /* ================= UPLOAD ================= */
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -44,7 +44,7 @@ export default function Home() {
       await fetchQuestions(data.resumeText);
       setInterviewStarted(true);
     } else {
-      alert(data.error);
+      alert(data.error || "Upload failed");
     }
 
     setIsFetchingQuestions(false);
@@ -59,22 +59,21 @@ export default function Home() {
 
     const data = await res.json();
 
-    if (res.ok) {
-      setQuestions(data.questions);
-      setAnswers([]);
+    if (res.ok && Array.isArray(data.questions)) {
+      setQuestions(data.questions.slice(0, 3));
       setCurrentIndex(0);
+      setAnswers([]);
     } else {
-      alert(data.error);
+      alert("Failed to generate questions");
     }
   }
 
-  /* ---------------- VOICE (STABLE) ---------------- */
+  /* ================= VOICE ================= */
 
   function startListening() {
     if (listening) return;
 
-    stopListening(); // safety
-
+    stopListening();
     finalTranscriptRef.current = "";
     setAnswer("");
 
@@ -83,7 +82,6 @@ export default function Home() {
       (window as any).webkitSpeechRecognition;
 
     const rec = new SpeechRecognition();
-
     rec.continuous = true;
     rec.interimResults = true;
     rec.lang = "en-US";
@@ -99,18 +97,15 @@ export default function Home() {
       let interim = "";
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
-
+        const text = event.results[i][0].transcript;
         if (event.results[i].isFinal) {
-          finalTranscriptRef.current += transcript + " ";
+          finalTranscriptRef.current += text + " ";
         } else {
-          interim += transcript;
+          interim += text;
         }
       }
 
-      setAnswer(
-        (finalTranscriptRef.current + interim).trim()
-      );
+      setAnswer((finalTranscriptRef.current + interim).trim());
     };
 
     recognitionRef.current = rec;
@@ -126,7 +121,7 @@ export default function Home() {
     setListening(false);
   }
 
-  /* ---------------- TIMER (STRICT) ---------------- */
+  /* ================= TIMER ================= */
 
   useEffect(() => {
     if (!interviewStarted || questions.length === 0) return;
@@ -141,8 +136,8 @@ export default function Home() {
     timerRef.current = setInterval(() => {
       setTimer((t) => {
         if (t <= 1) {
-          clearInterval(timerRef.current!);
           stopListening();
+          clearInterval(timerRef.current!);
           return 0;
         }
         return t - 1;
@@ -155,7 +150,7 @@ export default function Home() {
     };
   }, [currentIndex, interviewStarted]);
 
-  /* ---------------- SUBMIT (ONLY WAY TO NEXT QUESTION) ---------------- */
+  /* ================= SUBMIT ================= */
 
   function submitAnswer() {
     stopListening();
@@ -172,10 +167,10 @@ export default function Home() {
     }
   }
 
-  /* ---------------- REPORT ---------------- */
+  /* ================= REPORT ================= */
 
   async function generateReport() {
-    setLoading(true);
+    setLoadingReport(true);
 
     const res = await fetch("/api/generate-report", {
       method: "POST",
@@ -184,12 +179,13 @@ export default function Home() {
     });
 
     const data = await res.json();
-    setLoading(false);
+    setLoadingReport(false);
 
     if (res.ok) setReport(data.report);
+    else alert("Report generation failed");
   }
 
-  /* ---------------- UI ---------------- */
+  /* ================= UI ================= */
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100 flex justify-center px-6 py-10">
@@ -203,10 +199,64 @@ export default function Home() {
           </p>
         </div>
 
-        {/* INTERVIEW */}
-        {!interviewCompleted && interviewStarted && questions.length > 0 && (
-          <div className="bg-zinc-900 rounded-xl p-8 space-y-6">
+        {/* LOADING */}
+        {isFetchingQuestions && (
+          <div className="bg-zinc-900 rounded-xl p-10 animate-pulse text-center space-y-4">
+            <div className="h-4 bg-zinc-700 rounded w-1/2 mx-auto" />
+            <div className="h-24 bg-zinc-800 rounded" />
+            <p className="text-sm text-zinc-400">
+              Analyzing resume and preparing questions…
+            </p>
+          </div>
+        )}
 
+        {/* LANDING */}
+        {!interviewStarted && !isFetchingQuestions && (
+          <>
+            <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 text-center space-y-4">
+              <h2 className="text-xl font-semibold">Before You Start</h2>
+              <p className="text-sm text-zinc-400">
+                This interview evaluates how well you understand the projects mentioned in your resume.
+              </p>
+
+              <div className="flex flex-col items-center gap-6 text-sm mt-6">
+                <div>
+                  <h3 className="text-green-400 mb-2">✅ Do</h3>
+                  <ul className="space-y-2 text-zinc-300">
+                    <li>• Speak from real project experience</li>
+                    <li>• Explain decisions and challenges</li>
+                    <li>• Be concise and clear</li>
+                  </ul>
+                </div>
+
+                <div>
+                  <h3 className="text-red-400 mb-2">❌ Don’t</h3>
+                  <ul className="space-y-2 text-zinc-300">
+                    <li>• Give generic answers</li>
+                    <li>• Exaggerate work</li>
+                    <li>• Stay silent</li>
+                  </ul>
+                </div>
+              </div>
+
+              <p className="text-xs text-zinc-400">
+                Each question has a strict 160-second time limit.
+              </p>
+            </div>
+
+            <label className="block bg-zinc-900 border border-dashed border-zinc-700 rounded-xl p-10 text-center cursor-pointer hover:border-indigo-500 transition">
+              <input type="file" accept=".pdf" onChange={handleUpload} hidden />
+              <p className="text-lg font-medium">Upload your resume</p>
+              <p className="text-sm text-zinc-400 mt-2">
+                PDF format • Projects will be analyzed
+              </p>
+            </label>
+          </>
+        )}
+
+        {/* INTERVIEW */}
+        {interviewStarted && !interviewCompleted && questions.length > 0 && (
+          <div className="bg-zinc-900 rounded-xl p-8 space-y-6">
             <div className="flex justify-between">
               <span className="text-sm text-zinc-400">
                 Question {currentIndex + 1} of {questions.length}
@@ -218,17 +268,6 @@ export default function Home() {
 
             <div className="bg-zinc-800 rounded-lg p-6 text-lg">
               {questions[currentIndex]}
-            </div>
-
-            <div className="flex items-center gap-3 text-sm">
-              <span
-                className={`h-3 w-3 rounded-full ${
-                  listening ? "bg-green-400 animate-pulse" : "bg-zinc-500"
-                }`}
-              />
-              <span className="text-zinc-400">
-                {listening ? "Recording…" : "Mic off"}
-              </span>
             </div>
 
             <textarea
@@ -243,14 +282,14 @@ export default function Home() {
               <button
                 onClick={startListening}
                 disabled={listening || timer === 0}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-500 py-3 rounded-lg font-medium disabled:opacity-50"
+                className="flex-1 bg-emerald-600 py-3 rounded-lg"
               >
                 Start Answer
               </button>
 
               <button
                 onClick={submitAnswer}
-                className="flex-1 bg-indigo-600 hover:bg-indigo-500 py-3 rounded-lg font-medium"
+                className="flex-1 bg-indigo-600 py-3 rounded-lg"
               >
                 Submit Answer
               </button>
@@ -261,14 +300,12 @@ export default function Home() {
         {/* REPORT */}
         {interviewCompleted && !report && (
           <div className="bg-zinc-900 rounded-xl p-10 text-center space-y-4">
-            <h2 className="text-2xl font-semibold">
-              Interview Completed 🎉
-            </h2>
+            <h2 className="text-2xl font-semibold">Interview Completed 🎉</h2>
             <button
               onClick={generateReport}
-              className="bg-emerald-600 hover:bg-emerald-500 px-8 py-3 rounded-lg font-medium"
+              className="bg-emerald-600 px-8 py-3 rounded-lg"
             >
-              {loading ? "Generating Report…" : "Generate Report"}
+              {loadingReport ? "Generating…" : "Generate Report"}
             </button>
           </div>
         )}
