@@ -18,10 +18,10 @@ export default function Home() {
   const [report, setReport] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRef = useRef<any>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
-  /* ---------------- UPLOAD ---------------- */
+  /* ================= UPLOAD ================= */
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -36,6 +36,7 @@ export default function Home() {
       method: "POST",
       body: formData,
     });
+
     const data = await res.json();
 
     if (res.ok) {
@@ -54,6 +55,7 @@ export default function Home() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ resumeText }),
     });
+
     const data = await res.json();
 
     if (res.ok) {
@@ -65,22 +67,45 @@ export default function Home() {
     }
   }
 
-  /* ---------------- VOICE ---------------- */
+  /* ================= VOICE (LIVE TEXT) ================= */
 
   function startListening() {
     if (listening) return;
 
-    const rec = new (window.SpeechRecognition ||
-      window.webkitSpeechRecognition)();
+    const SpeechRecognition =
+      (window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition;
+
+    const rec = new SpeechRecognition();
 
     rec.continuous = true;
+    rec.interimResults = true; // ✅ LIVE TRANSCRIPTION
     rec.lang = "en-US";
 
+    let finalTranscript = "";
+
     rec.onstart = () => setListening(true);
-    rec.onend = () => setListening(false);
-    rec.onresult = (e: any) => {
-      const text = e.results[e.results.length - 1][0].transcript;
-      setAnswer((p) => (p ? p + " " + text : text));
+
+    rec.onend = () => {
+      setListening(false);
+      setAnswer(finalTranscript.trim());
+    };
+
+    rec.onresult = (event: any) => {
+      let interimTranscript = "";
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript + " ";
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      // ✅ Show live typing
+      setAnswer((finalTranscript + interimTranscript).trim());
     };
 
     rec.start();
@@ -93,7 +118,7 @@ export default function Home() {
     setListening(false);
   }
 
-  /* ---------------- TIMER ---------------- */
+  /* ================= TIMER ================= */
 
   useEffect(() => {
     if (!interviewStarted || questions.length === 0) return;
@@ -120,13 +145,13 @@ export default function Home() {
     };
   }, [currentIndex, questions.length, interviewStarted]);
 
-  /* ---------------- SUBMIT ---------------- */
+  /* ================= SUBMIT ================= */
 
   function submitAnswer() {
     stopListening();
     if (timerRef.current) clearInterval(timerRef.current);
 
-    setAnswers((p) => [...p, answer || "(No answer)"]);
+    setAnswers((prev) => [...prev, answer || "(No answer)"]);
     setAnswer("");
 
     if (currentIndex + 1 < questions.length) {
@@ -136,7 +161,7 @@ export default function Home() {
     }
   }
 
-  /* ---------------- REPORT ---------------- */
+  /* ================= REPORT ================= */
 
   async function generateReport() {
     setLoading(true);
@@ -153,7 +178,7 @@ export default function Home() {
     if (res.ok) setReport(data.report);
   }
 
-  /* ---------------- UI ---------------- */
+  /* ================= UI ================= */
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100 flex justify-center px-6 py-10">
@@ -173,8 +198,8 @@ export default function Home() {
             <div className="h-4 bg-zinc-700 rounded w-1/3 mx-auto" />
             <div className="h-4 bg-zinc-700 rounded w-3/4 mx-auto" />
             <div className="h-24 bg-zinc-800 rounded" />
-            <p className="text-center text-sm text-zinc-400 mt-6">
-              Analyzing your resume and preparing interview questions…
+            <p className="text-center text-sm text-zinc-400">
+              Analyzing your resume and preparing questions…
             </p>
           </div>
         )}
