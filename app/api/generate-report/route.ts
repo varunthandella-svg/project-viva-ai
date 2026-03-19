@@ -1,83 +1,107 @@
 import { NextResponse } from "next/server";
 import OpenAI from "openai";
 
+export const runtime = "nodejs";
+
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY!,
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 export async function POST(req: Request) {
   try {
-    const { questions, answers } = await req.json();
+    const body = await req.json();
+    const { questions, answers } = body;
 
-    if (!questions || !answers || questions.length === 0) {
+    if (!questions || !answers) {
       return NextResponse.json(
-        { error: "Missing interview data" },
+        { error: "Missing questions or answers" },
         { status: 400 }
       );
     }
 
     const prompt = `
-You are a senior technical interviewer.
+You are an AI Interview Evaluator.
 
-Below is a completed project-based interview.
+Strictly evaluate ONLY based on the answers.
 
-INTERVIEW DATA:
-${questions
-  .map(
-    (q: string, i: number) =>
-      `Q${i + 1}: ${q}\nA${i + 1}: ${answers[i]}`
-  )
-  .join("\n\n")}
+Return STRICT VALID JSON only.
 
-TASK:
-Generate a FINAL INTERVIEW REPORT with the following sections:
+SCORING:
+- Each question: 10 marks
+- Total: 50
 
-1. Overall Summary (2–3 lines)
-2. Strengths (bullet points)
-3. Gaps (bullet points)
-4. Areas of Improvement (actionable bullet points)
-5. Final Verdict (STRICTLY ONE WORD ONLY)
+Parameters:
+Clarity, Structure, Confidence, Relevance, Professionalism (2 each)
 
-VERDICT RULES (VERY IMPORTANT):
-Final Verdict MUST be exactly one of:
-- Below Average
-- Average
-- Good
+Verdict:
+>=35 → Hire
+<35 → Reject
 
-Do NOT use any other wording.
+Questions:
+${questions.map((q: string, i: number) => `${i + 1}. ${q}`).join("\n")}
 
-OUTPUT FORMAT:
+Answers:
+${answers.map((a: string, i: number) => `${i + 1}. ${a}`).join("\n")}
 
-Overall Summary:
-...
+OUTPUT JSON ONLY:
 
-Strengths:
-- ...
-
-Gaps:
-- ...
-
-Areas of Improvement:
-- ...
-
-Final Verdict:
-<Below Average | Average | Good>
+{
+  "questionWiseScores": [
+    { "questionNumber": 1, "score": 0 },
+    { "questionNumber": 2, "score": 0 },
+    { "questionNumber": 3, "score": 0 },
+    { "questionNumber": 4, "score": 0 },
+    { "questionNumber": 5, "score": 0 }
+  ],
+  "totalScore": 0,
+  "strengths": [],
+  "improvementAreas": [],
+  "finalVerdict": "Reject"
+}
 `;
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0.2,
-      max_tokens: 600,
       messages: [{ role: "user", content: prompt }],
     });
 
+    let raw = response.choices[0].message.content || "{}";
+
+    // 🔥 CLEAN RESPONSE (important)
+    raw = raw.replace(/```json/g, "").replace(/```/g, "").trim();
+
+    // 🔥 FIX COMMON JSON ERRORS
+    raw = raw.replace(/]\s*"finalVerdict"/g, '], "finalVerdict"');
+
+    let parsed;
+
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      console.error("❌ FINAL RAW:", raw);
+
+      return NextResponse.json(
+        {
+          error: "JSON parsing failed",
+          raw,
+        },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({
-      report: response.choices[0].message.content || "",
+      report: parsed,
     });
-  } catch (error) {
-    console.error("Report generation error:", error);
+
+  } catch (error: any) {
+    console.error("REPORT ERROR:", error);
+
     return NextResponse.json(
-      { error: "Failed to generate report" },
+      {
+        error: "Report generation failed",
+        details: error?.message,
+      },
       { status: 500 }
     );
   }
