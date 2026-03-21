@@ -13,6 +13,7 @@ type ReportType = {
 export default function Home() {
   const [resumeText, setResumeText] = useState("");
   const [resumeUploaded, setResumeUploaded] = useState(false);
+  const [resumeFileName, setResumeFileName] = useState("");
   const [startScreen, setStartScreen] = useState(true);
 
   const [questions, setQuestions] = useState<string[]>([]);
@@ -29,6 +30,13 @@ export default function Home() {
   const [timeLeft, setTimeLeft] = useState(180);
   const [statusText, setStatusText] = useState("");
 
+  const [uploadingResume, setUploadingResume] = useState(false);
+  const [startingInterview, setStartingInterview] = useState(false);
+  const [startingAnswer, setStartingAnswer] = useState(false);
+  const [stoppingAnswer, setStoppingAnswer] = useState(false);
+  const [retakingAnswer, setRetakingAnswer] = useState(false);
+  const [submittingNext, setSubmittingNext] = useState(false);
+
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -43,18 +51,26 @@ export default function Home() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const formData = new FormData();
-    formData.append("file", file);
+    try {
+      setUploadingResume(true);
+      setResumeFileName(file.name);
 
-    const res = await fetch("/api/upload-resume", {
-      method: "POST",
-      body: formData,
-    });
+      const formData = new FormData();
+      formData.append("file", file);
 
-    const data = await res.json();
+      const res = await fetch("/api/upload-resume", {
+        method: "POST",
+        body: formData,
+      });
 
-    setResumeText(data.resumeText || "");
-    setResumeUploaded(true);
+      const data = await res.json();
+
+      setResumeText(data.resumeText || "");
+      setResumeUploaded(true);
+      setStatusText("Resume uploaded successfully.");
+    } finally {
+      setUploadingResume(false);
+    }
   }
 
   function speak(text: string) {
@@ -195,41 +211,49 @@ export default function Home() {
   }
 
   async function startRecording() {
-    if (recording) return;
+    if (recording || startingAnswer) return;
 
-    await cleanupAudio();
+    try {
+      setStartingAnswer(true);
+      await cleanupAudio();
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    streamRef.current = stream;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
 
-    const recorder = new MediaRecorder(stream);
-    mediaRecorderRef.current = recorder;
+      const recorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = recorder;
 
-    chunksRef.current = [];
-    accumulatedTranscriptRef.current = "";
-    setLiveText("");
-    setFinalText("");
+      chunksRef.current = [];
+      accumulatedTranscriptRef.current = "";
+      setLiveText("");
+      setFinalText("");
 
-    recorder.ondataavailable = (e: BlobEvent) => {
-      if (e.data.size > 0) {
-        chunksRef.current.push(e.data);
-      }
-    };
+      recorder.ondataavailable = (e: BlobEvent) => {
+        if (e.data.size > 0) {
+          chunksRef.current.push(e.data);
+        }
+      };
 
-    recorder.start();
+      recorder.start();
 
-    shouldKeepRecognitionRunningRef.current = true;
-    isStoppingRef.current = false;
-    startSpeechRecognition();
+      shouldKeepRecognitionRunningRef.current = true;
+      isStoppingRef.current = false;
+      startSpeechRecognition();
 
-    setRecording(true);
-    setStatusText("Answer is recording...");
+      setRecording(true);
+      setStatusText("Answer is recording...");
+    } finally {
+      setStartingAnswer(false);
+    }
   }
 
-  async function stopRecording() {
-    if (!recording) return;
+  async function stopRecording(): Promise<string> {
+    if (!recording || stoppingAnswer) {
+      return (finalText || liveText || "").trim();
+    }
 
-    return new Promise<void>((resolve) => {
+    return new Promise<string>((resolve) => {
+      setStoppingAnswer(true);
       isStoppingRef.current = true;
       shouldKeepRecognitionRunningRef.current = false;
 
@@ -244,10 +268,12 @@ export default function Home() {
       const recorder = mediaRecorderRef.current;
 
       if (!recorder) {
+        const fallback = (finalText || liveText || accumulatedTranscriptRef.current).trim();
         setRecording(false);
         setStatusText("Recording stopped.");
         void cleanupAudio();
-        resolve();
+        setStoppingAnswer(false);
+        resolve(fallback);
         return;
       }
 
@@ -268,49 +294,62 @@ export default function Home() {
 
           const data = await res.json();
           const text = (data?.text || "").trim();
+          const finalAnswer = text || accumulatedTranscriptRef.current.trim();
 
-          setFinalText(text);
-          setLiveText(text || accumulatedTranscriptRef.current);
+          setFinalText(finalAnswer);
+          setLiveText(finalAnswer);
 
           setAnswers((prev) => {
             const updated = [...prev];
-            updated[currentIndex] = text || accumulatedTranscriptRef.current;
+            updated[currentIndex] = finalAnswer;
             return updated;
           });
+
+          resolve(finalAnswer);
         } finally {
           setRecording(false);
           setStatusText("Recording stopped.");
           mediaRecorderRef.current = null;
           await cleanupAudio();
-          resolve();
+          setStoppingAnswer(false);
         }
       };
 
       try {
         recorder.stop();
       } catch {
+        const fallback = (finalText || liveText || accumulatedTranscriptRef.current).trim();
         setRecording(false);
         setStatusText("Recording stopped.");
         void cleanupAudio();
-        resolve();
+        setStoppingAnswer(false);
+        resolve(fallback);
       }
     });
   }
 
   async function retakeAnswer() {
-    if (recording) {
-      await stopRecording();
+    if (retakingAnswer) return;
+
+    try {
+      setRetakingAnswer(true);
+
+      if (recording) {
+        await stopRecording();
+      }
+
+      setAnswers((prev) => {
+        const updated = [...prev];
+        updated[currentIndex] = "";
+        return updated;
+      });
+
+      resetTranscript();
+      setStatusText("Retake started...");
+      await startRecording();
+    } finally {
+      setRetakingAnswer(false);
     }
-
-    setAnswers((prev) => {
-      const updated = [...prev];
-      updated[currentIndex] = "";
-      return updated;
-    });
-
-    resetTranscript();
-    setStatusText("Retake started...");
-    await startRecording();
   }
 
   function goToNextQuestion() {
@@ -328,48 +367,68 @@ export default function Home() {
   }
 
   async function handleSubmitAndNext() {
-    if (recording) {
-      await stopRecording();
+    if (submittingNext) return;
+
+    try {
+      setSubmittingNext(true);
+
+      let currentAnswer = (answers[currentIndex] || finalText || liveText || "").trim();
+
+      if (recording) {
+        currentAnswer = await stopRecording();
+      }
+
+      const normalizedAnswers = [...answers];
+      normalizedAnswers[currentIndex] = currentAnswer;
+      setAnswers(normalizedAnswers);
+
+      if (currentIndex === questions.length - 1) {
+        setLoadingReport(true);
+
+        const res = await fetch("/api/generate-report", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ questions, answers: normalizedAnswers }),
+        });
+
+        const data = await res.json();
+
+        setReport(data.report);
+        setLoadingReport(false);
+        return;
+      }
+
+      goToNextQuestion();
+    } finally {
+      setSubmittingNext(false);
     }
+  }
 
-    if (currentIndex === questions.length - 1) {
-      setLoadingReport(true);
+  async function startInterview() {
+    if (startingInterview) return;
 
-      const normalizedAnswers = Array.from({ length: questions.length }, (_, i) => answers[i] || "");
+    try {
+      setStartingInterview(true);
 
-      const res = await fetch("/api/generate-report", {
+      const res = await fetch("/api/get-project-questions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ questions, answers: normalizedAnswers }),
+        body: JSON.stringify({ resumeText }),
       });
 
       const data = await res.json();
 
-      setReport(data.report);
-      setLoadingReport(false);
-      return;
+      setQuestions(data.questions);
+      setCurrentIndex(0);
+      setAnswers(new Array(5).fill(""));
+      resetTranscript();
+      setStartScreen(false);
+
+      startTimer();
+      speak(data.questions[0]);
+    } finally {
+      setStartingInterview(false);
     }
-
-    goToNextQuestion();
-  }
-
-  async function startInterview() {
-    const res = await fetch("/api/get-project-questions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ resumeText }),
-    });
-
-    const data = await res.json();
-
-    setQuestions(data.questions);
-    setCurrentIndex(0);
-    setAnswers(new Array(5).fill(""));
-    resetTranscript();
-    setStartScreen(false);
-
-    startTimer();
-    speak(data.questions[0]);
   }
 
   if (startScreen) {
@@ -460,21 +519,30 @@ export default function Home() {
                 Upload your resume to begin the AI mock interview.
               </p>
 
-              <div className="rounded-2xl border-2 border-dashed border-blue-200 bg-blue-50 p-6 text-center">
-                <div className="mb-3 text-sm font-medium text-[#0B1F4D]">
+              <div className="rounded-2xl border-2 border-dashed border-blue-200 bg-blue-50 p-6">
+                <div className="mb-3 text-center text-sm font-medium text-[#0B1F4D]">
                   Upload your resume here
                 </div>
 
-                <input
-                  type="file"
-                  accept=".pdf"
-                  onChange={handleResumeUpload}
-                  className="mx-auto block text-sm"
-                />
+                <label className="flex cursor-pointer items-center justify-center rounded-xl border border-blue-200 bg-white px-4 py-3 text-sm font-medium text-[#0B1F4D] shadow-sm hover:bg-blue-50">
+                  <input
+                    type="file"
+                    accept=".pdf"
+                    onChange={handleResumeUpload}
+                    className="hidden"
+                  />
+                  {uploadingResume ? "Uploading..." : "Choose Resume PDF"}
+                </label>
 
-                <div className="mt-3 text-xs text-gray-500">
+                <div className="mt-3 text-center text-xs text-gray-500">
                   Supported format: PDF
                 </div>
+
+                {resumeFileName ? (
+                  <div className="mt-4 rounded-lg bg-white px-3 py-2 text-sm text-gray-700 shadow-sm">
+                    <span className="font-medium">Selected:</span> {resumeFileName}
+                  </div>
+                ) : null}
 
                 {resumeUploaded ? (
                   <div className="mt-4 rounded-lg bg-green-100 px-3 py-2 text-sm font-medium text-green-700">
@@ -485,10 +553,10 @@ export default function Home() {
 
               <button
                 onClick={startInterview}
-                disabled={!resumeUploaded}
+                disabled={!resumeUploaded || uploadingResume || startingInterview}
                 className="mt-6 w-full rounded-xl bg-[#F97316] px-6 py-3 text-lg font-semibold text-white disabled:opacity-50"
               >
-                Start Interview
+                {startingInterview ? "Starting Interview..." : "Start Interview"}
               </button>
             </div>
           </div>
@@ -661,31 +729,41 @@ export default function Home() {
           {!recording ? (
             <button
               onClick={startRecording}
-              className="rounded-xl bg-green-600 px-5 py-3 font-semibold text-white"
+              disabled={startingAnswer || retakingAnswer || submittingNext}
+              className="rounded-xl bg-green-600 px-5 py-3 font-semibold text-white disabled:opacity-50"
             >
-              Start Answer
+              {startingAnswer ? "Starting..." : "Start Answer"}
             </button>
           ) : (
             <button
               onClick={stopRecording}
-              className="rounded-xl bg-red-600 px-5 py-3 font-semibold text-white"
+              disabled={stoppingAnswer || submittingNext}
+              className="rounded-xl bg-red-600 px-5 py-3 font-semibold text-white disabled:opacity-50"
             >
-              Stop Mic
+              {stoppingAnswer ? "Stopping..." : "Stop Mic"}
             </button>
           )}
 
           <button
             onClick={retakeAnswer}
-            className="rounded-xl bg-yellow-500 px-5 py-3 font-semibold text-white"
+            disabled={retakingAnswer || startingAnswer || submittingNext}
+            className="rounded-xl bg-yellow-500 px-5 py-3 font-semibold text-white disabled:opacity-50"
           >
-            Retake
+            {retakingAnswer ? "Retaking..." : "Retake"}
           </button>
 
           <button
             onClick={handleSubmitAndNext}
-            className="rounded-xl bg-[#1D4ED8] px-5 py-3 font-semibold text-white"
+            disabled={submittingNext || startingAnswer || retakingAnswer}
+            className="rounded-xl bg-[#1D4ED8] px-5 py-3 font-semibold text-white disabled:opacity-50"
           >
-            {currentIndex === questions.length - 1 ? "Finish Interview" : "Submit & Next"}
+            {submittingNext
+              ? currentIndex === questions.length - 1
+                ? "Finishing..."
+                : "Submitting..."
+              : currentIndex === questions.length - 1
+              ? "Finish Interview"
+              : "Submit & Next"}
           </button>
         </div>
       </div>
